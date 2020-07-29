@@ -8,8 +8,8 @@ from wandb.keras import WandbCallback
 
 tf.get_logger().setLevel('ERROR')
 
-os.environ['WANDB_MODE'] = 'dryrun' # Testing for funcitonality
-wandb.init(project="MC_DepthNN")
+#os.environ['WANDB_MODE'] = 'dryrun' # Testing for funcitonality
+wandb.init(project="mc_depthnn")
 
 physical_devices = tf.config.list_physical_devices('GPU')
 try:
@@ -20,14 +20,14 @@ except:
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 DATA_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "images")
-BATCH_SIZE = 8
-EPOCHS = 3
+BATCH_SIZE = 16
+EPOCHS = 100
 
 image_count = len(glob.glob(DATA_DIR + os.path.sep + "inputs"))
 image_width = 512
 image_height = 512
 
-input_shape = (image_height, image_width, 3,) # 3 = color channels
+input_shape = (image_height, image_width, 3,)
 
 normalization_layer = tf.keras.layers.experimental.preprocessing.Rescaling(1./255)
 
@@ -51,14 +51,23 @@ def process_path(file_path):
 
 	return input_image, output_image
 
+def process_validation_path(file_path):
+	input_image = tf.io.read_file(file_path)
+	output_image = tf.io.read_file(tf.strings.join([DATA_DIR, "/validation_outputs/", tf.strings.substr(file_path, -8, -1)]))
+
+	input_image = decode_colored_img(input_image)
+	output_image = decode_bw_img(output_image)
+
+	input_image = normalization_layer(input_image)
+	output_image = normalization_layer(output_image)
+
+	return input_image, output_image
+
 def configure_for_performance(ds):
-	ds = ds.cache()
-	ds = ds.shuffle(buffer_size=1000)
+	#ds = ds.cache()
 	ds = ds.batch(BATCH_SIZE)
 	ds = ds.prefetch(buffer_size=AUTOTUNE)
 	return ds
-
-#print(normalization_layer(decode_bw_img(tf.io.read_file(os.path.join(DATA_DIR, "outputs", os.path.basename("/Users/ben/Desktop/Git_Stuff/MC_DepthNN_Git/data/images/inputs/0001.png"))))))
 
 print("Creating model...")
 
@@ -85,7 +94,7 @@ model.add(tf.keras.layers.Conv2DTranspose(1, (3, 3), strides=2, padding="same", 
 model.summary()
 model.compile(loss='MSE', optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), metrics=[tf.keras.metrics.BinaryAccuracy(), tf.keras.metrics.Precision(), tf.keras.metrics.Recall()])
 
-checkpoint_path = "/Users/ben/Desktop/Git_Stuff/MC_DepthNN_Git/content/training_2/cp-{epoch:04d}.ckpt"
+checkpoint_path = os.path.realpath(__file__)[:len(os.path.realpath(__file__)) - 8] + "/content/training/cp-{epoch:04d}.ckpt"
 checkpoint_dir = os.path.dirname(checkpoint_path)
 
 cp_callback = tf.keras.callbacks.ModelCheckpoint(
@@ -98,30 +107,20 @@ model.save_weights(checkpoint_path.format(epoch=0))
 
 print("Compiling data...")
 
-train_ds = tf.data.Dataset.list_files(str(DATA_DIR + '/inputs/*.png'))
+train_ds = tf.data.Dataset.list_files(str(DATA_DIR + '/inputs/*.png'), shuffle=False).take(4096)
+train_ds = train_ds.shuffle(4096, reshuffle_each_iteration=True)
 train_ds = train_ds.map(process_path, num_parallel_calls=AUTOTUNE)
-
-for val in train_ds.take(1):
-	print(val)
-
-#train_ds = train_ds.map(lambda x, y: (x.set_shape([512, 512, 3]), y))
-#train_ds = train_ds.map(lambda x, y: (x, y.set_shape([512, 512, 1])))
-
-#print("DID STUFF HERE")
-#for val in train_ds.take(1):
-#	print(val)
-
 train_ds = configure_for_performance(train_ds)
 
-test_ds = tf.data.Dataset.list_files(str(DATA_DIR + '/validation_inputs/*.png'))
-test_ds = test_ds.map(process_path, num_parallel_calls=AUTOTUNE)
-#test_ds = test_ds.map(lambda x, y: (x.set_shape([512, 512, 3]), y))
-#test_ds = test_ds.map(lambda x, y: (x, y.set_shape((512, 512, 1))))
+test_ds = tf.data.Dataset.list_files(str(DATA_DIR + '/validation_inputs/*.png'), shuffle=False)
+test_ds = test_ds.shuffle(4096, reshuffle_each_iteration=True)
+test_ds = test_ds.map(process_validation_path, num_parallel_calls=AUTOTUNE)
 test_ds = configure_for_performance(test_ds)
 
-print(type(train_ds))
-print(train_ds)
-print(type(test_ds))
-print(test_ds)
+#print(type(train_ds))
+#print(train_ds)
+#print(type(test_ds))
+#print(test_ds)
 
 model.fit(train_ds, batch_size=BATCH_SIZE, epochs=EPOCHS, verbose=2, callbacks=[cp_callback, WandbCallback()], validation_data=test_ds)
+model.save(os.path.join(wandb.run.dir, "model.h5"))
