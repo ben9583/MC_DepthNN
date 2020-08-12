@@ -7,6 +7,7 @@ class UpscaleBlock(Model):
         super(UpscaleBlock, self).__init__()
         self.up = UpSampling2D(size=(2, 2), interpolation='bilinear', name=name+'_upsampling2d')
         self.concat = Concatenate(name=name+'_concat') # Skip connection        
+        self.convA = Conv2D(filters=filters, kernel_size=3, strides=1, padding='same', name=name+'_convA')
         self.reluA = LeakyReLU(alpha=0.2)
         self.convB = Conv2D(filters=filters, kernel_size=3, strides=1, padding='same', name=name+'_convB')
         self.reluB = LeakyReLU(alpha=0.2)
