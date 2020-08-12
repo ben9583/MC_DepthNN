@@ -6,10 +6,16 @@ import sys
 import wandb
 from wandb.keras import WandbCallback
 
+from d169 import DepthEstimate
+
+RESTORE_SAVE = False
 tf.get_logger().setLevel('ERROR')
 
 #os.environ['WANDB_MODE'] = 'dryrun' # Testing for funcitonality
-wandb.init(project="mc_depthnn")
+if RESTORE_SAVE:
+	wandb.init(project="mc_depthnn", resume=True)
+else:
+	wandb.init(project="mc_depthnn")
 
 physical_devices = tf.config.list_physical_devices('GPU')
 try:
@@ -21,7 +27,7 @@ except:
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 DATA_DIR = os.path.join(os.path.dirname(os.path.realpath(__file__)), "data", "images")
 BATCH_SIZE = 8
-EPOCHS = 200
+EPOCHS = 50
 
 image_count = len(glob.glob(DATA_DIR + os.path.sep + "inputs"))
 image_width = 512
@@ -92,40 +98,34 @@ model.add(tf.keras.layers.Conv2DTranspose(8, (3, 3), strides=2, padding="same", 
 model.add(tf.keras.layers.Conv2DTranspose(1, (3, 3), strides=2, padding="same", activation='sigmoid'))
 """
 
+"""
 input_layer = tf.keras.Input(shape=(input_shape))
-x = tf.keras.layers.Conv2D(4, (3, 3), activation='relu')(input_layer)
+x = tf.keras.layers.Conv2D(8, (3, 3), activation='relu')(input_layer)
 x = tf.keras.layers.MaxPooling2D((2, 2))(x)
-x = tf.keras.layers.Conv2D(8, (3, 3), activation='relu')(x)
+x = tf.keras.layers.Conv2D(16, (3, 3), activation='relu')(x)
 x = tf.keras.layers.MaxPooling2D((2, 2))(x)
-x = tf.keras.layers.Conv2D(8, (3, 3), activation='relu')(x)      
+x = tf.keras.layers.Conv2D(32, (3, 3), activation='relu')(x)      
 x = tf.keras.layers.MaxPooling2D((2, 2))(x)
-x = tf.keras.layers.Conv2D(16, (3, 3), activation='relu')(x)       
-x = tf.keras.layers.MaxPooling2D((2, 2))(x)
-x = tf.keras.layers.Conv2DTranspose(16, (3, 3), padding="valid", activation='relu')(x)
-x = tf.keras.layers.Conv2DTranspose(1, (1, 1), padding="valid", activation='relu')(x)
-
-"""
-da_list = []
-
-for i in range(32):
-    print(i)
-    for j in range(32):
-        y = tf.keras.layers.Lambda(lambda x: x[:,i,j,:])(x)
-        da_list.append(tf.keras.layers.Dense(1, activation="relu")(y))
-
-x = tf.keras.layers.Concatenate()(da_list)
-x = tf.keras.layers.Reshape((32, 32, 1))(x)
-"""
-
-x = tf.keras.layers.UpSampling2D(size=(16, 16))(x)
+x = tf.keras.layers.Conv2DTranspose(32, (3, 3), padding="valid", activation='relu')(x)
+x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, padding="same", activation='relu')(x)
+x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, padding="same", activation='relu')(x)
+x = tf.keras.layers.Conv2DTranspose(32, (3, 3), strides=2, padding="same", activation='relu')(x)
 x = tf.keras.layers.Concatenate()([x, input_layer])
 output_layer = tf.keras.layers.Conv2D(1, (1, 1), activation="sigmoid")(x)
 
 model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
-     
-#model.summary()
+"""
 
-model.compile(loss='MSE', optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), metrics=[tf.keras.metrics.Accuracy()])
+model = None
+
+if RESTORE_SAVE:
+	model = tf.keras.models.load_model("wandb/run-20200805_215504-j6qvvapg/model.tf")
+else:
+	model = DepthEstimate()
+	model.build((None, 512, 512, 3,))
+
+print(model)
+model.compile(loss='MSE', optimizer=tf.keras.optimizers.Adadelta(), metrics=[tf.keras.metrics.Accuracy()])
 
 checkpoint_path = os.path.realpath(__file__)[:len(os.path.realpath(__file__)) - 8] + "/content/training/cp-{epoch:04d}.ckpt"
 checkpoint_dir = os.path.dirname(checkpoint_path)
@@ -133,7 +133,7 @@ checkpoint_dir = os.path.dirname(checkpoint_path)
 cp_callback = tf.keras.callbacks.ModelCheckpoint(
     filepath=checkpoint_path, 
     verbose=1,
-    period=100
+    period=25,
 )
 
 model.save_weights(checkpoint_path.format(epoch=0))
@@ -155,5 +155,5 @@ test_ds = configure_for_performance(test_ds)
 #print(type(test_ds))
 #print(test_ds)
 
-model.fit(train_ds, batch_size=BATCH_SIZE, epochs=EPOCHS, verbose=2, callbacks=[cp_callback, WandbCallback()], validation_data=test_ds)
-model.save(os.path.join(wandb.run.dir, "model.h5"))
+model.fit(train_ds, batch_size=BATCH_SIZE, epochs=EPOCHS, verbose=2, callbacks=[WandbCallback()], validation_data=test_ds, initial_epoch=wandb.run.step)
+model.save(os.path.join(wandb.run.dir, "model.tf"), save_format="tf")
